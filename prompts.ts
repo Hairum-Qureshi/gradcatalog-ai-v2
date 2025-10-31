@@ -1,14 +1,14 @@
 import { CatalogLinkData, PageData } from "./main";
 
-export function getPrompt1(
+export function giveGeminiContext(
 	question: string,
-	gradCISCatalogLinks: CatalogLinkData[]
-) {
+	dataSourceHashMap: Map<string, CatalogLinkData>
+): string {
 	return `
         You are tasked with determining which **University of Delaware Computer and Information Sciences (CIS)** graduate program page(s) best answer the user's question.
         **User question:** "${question}"
         You are given a JSON list of links to UD CIS graduate program pages:
-        ${JSON.stringify(gradCISCatalogLinks)}
+        ${JSON.stringify(Object.fromEntries(dataSourceHashMap))}
         **Instructions:**
         1. Return **only the href field(s)** of the **1-2 most relevant links**, as a **comma-separated list**.
         - Select links that are *directly and specifically* related to the user's question.
@@ -20,11 +20,11 @@ export function getPrompt1(
 }
 
 // TODO - add backtracking if the chosen source links' content the AI chose isn't helpful towards providing a suitable answer to the user's query, it'll try a second time (and if that attempt fails) then prompt the user they don't have much knowledge to answer it.
-export function getPrompt2(
+export function giveGeminiAnswerInstructions(
 	question: string,
 	chosenSources: string[],
 	dataSource: PageData[]
-) {
+): string {
 	const formattedSources = dataSource
 		.map((d, i) => `### Source ${i + 1} (${d.linkRef})\n${d.content}`)
 		.join("\n\n---\n\n");
@@ -72,5 +72,3 @@ export function getPrompt2(
         ${chosenSources.join("\n")}
         `;
 }
-
-//         If you think the data source provided is not suited for answering the given question,
