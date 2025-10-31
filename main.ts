@@ -5,10 +5,12 @@ import {
 	GenerateContentStreamResult,
 	GoogleGenerativeAI
 } from "@google/generative-ai";
-import { getPrompt1, getPrompt2 } from "./prompts";
+import { giveGeminiContext, giveGeminiAnswerInstructions } from "./prompts";
 import dotenv from "dotenv";
 import chalk from "chalk";
 import { startRedis, redis } from "./redis-init";
+import { Langbase } from "langbase";
+import { DataArray, pipeline } from "@xenova/transformers";
 
 dotenv.config();
 
@@ -20,6 +22,12 @@ const PORT = process.env.PORT! || 8000;
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
+// Initialize the Langbase client
+// Head to: https://langbase.com/docs/api-reference/api-keys#get-your-langbase-api-key to learn how to get your API key
+const langbase = new Langbase({
+	apiKey: process.env.LANGBASE_API_KEY!
+});
+
 export interface CatalogLinkData {
 	text: string;
 	href: string;
@@ -30,52 +38,150 @@ export interface PageData {
 	content: string;
 }
 
-async function getPageContent(href: string): Promise<PageData> {
-	const page = await axios.get(href);
-	const pageDataHTML = page.data;
-	const $ = load(pageDataHTML);
-	const pageContent = $(".block_content");
+async function getVectorEmbedding(chunk: string): Promise<DataArray> {
+	const extractor = await pipeline(
+		"feature-extraction",
+		"Xenova/all-MiniLM-L6-v2"
+	);
 
-	return {
-		linkRef: href,
-		content: pageContent.html()!
-	};
+	const response = await extractor(chunk, {
+		pooling: "mean",
+		normalize: true
+	});
+
+	return response.data;
+}
+
+async function chunkText(content: string, link: string) {
+	try {
+		const chunks = await langbase.chunker({
+			content,
+			chunkMaxLength: 1024,
+			chunkOverlap: 256
+		});
+
+		if (!(await redis.hetGet(`${link}-chunk-embeds`))) {
+			for (let i = 0; i < chunks.length; i++) {
+				await redis.hSet(
+					`${link}-chunk-embeds`,
+					i,
+					JSON.stringify({
+						chunkIndex: i,
+						text: chunks[i],
+						embedding: await getVectorEmbedding(chunks[i])
+					})
+				);
+			}
+		}
+	} catch (error) {
+		console.error(
+			chalk.redBright(
+				`There was a problem chunking text in the ${chalk.yellowBright(
+					"chunkText"
+				)} function:`,
+				error
+			)
+		);
+	}
 }
 
 export async function createDataSourceJSON(): Promise<
 	Map<string, CatalogLinkData>
 > {
-	const gradCISCatalog = await axios.get(
-		"https://catalog.udel.edu/content.php?catoid=93&navoid=30534"
-	);
-	const gradCISCatalogHTML = gradCISCatalog.data;
-	const $ = load(gradCISCatalogHTML);
-	const links = $("#data_p_11725");
-	const dataSourceHashMap: Map<string, CatalogLinkData> = new Map();
-	$(links)
-		.find("a")
-		.map((_, el) => {
-			dataSourceHashMap.set(`https://catalog.udel.edu/${$(el).attr("href")}`, {
-				text: $(el).text().trim(),
-				href: `https://catalog.udel.edu/${$(el).attr("href")}`
-			});
-		})
-		.get();
+	try {
+		const gradCISCatalog = await axios.get(
+			"https://catalog.udel.edu/content.php?catoid=93&navoid=30534"
+		);
+		const gradCISCatalogHTML = gradCISCatalog.data;
+		const $ = load(gradCISCatalogHTML);
+		const links = $("#data_p_11725");
+		const dataSourceHashMap: Map<string, CatalogLinkData> = new Map();
+		$(links)
+			.find("a")
+			.map((_, el) => {
+				dataSourceHashMap.set(
+					`https://catalog.udel.edu/${$(el).attr("href")}`,
+					{
+						text: $(el).text().trim(),
+						href: `https://catalog.udel.edu/${$(el).attr("href")}`
+					}
+				);
+			})
+			.get();
 
-	dataSourceHashMap.set(
-		"https://catalog.udel.edu/preview_entity.php?catoid=93&ent_oid=11725&returnto=30534",
-		{
-			text: "Department of Computer and Information Sciences",
-			href: "https://catalog.udel.edu/preview_entity.php?catoid=93&ent_oid=11725&returnto=30534"
-		}
-	);
+		dataSourceHashMap.set(
+			"https://catalog.udel.edu/preview_entity.php?catoid=93&ent_oid=11725&returnto=30534",
+			{
+				text: "Department of Computer and Information Sciences",
+				href: "https://catalog.udel.edu/preview_entity.php?catoid=93&ent_oid=11725&returnto=30534"
+			}
+		);
 
-	return dataSourceHashMap;
+		return dataSourceHashMap;
+	} catch (error) {
+		console.error(
+			chalk.redBright(
+				`There was a problem generating JSON in the ${chalk.yellowBright(
+					"createDataSourceJSON"
+				)} function:`,
+				error
+			)
+		);
+		return new Map();
+	}
 }
 
 createDataSourceJSON();
 
+// TODO - need to add expiry to Redis for hashed page content
+
+async function getPageContent(href: string) {
+	const page = await axios.get(href);
+	const pageDataHTML = page.data;
+	const $ = load(pageDataHTML);
+	const pageContent = $(".block_content");
+
+	await redis.hSet(
+		"dataSource",
+		href,
+		JSON.stringify({
+			linkRef: href,
+			content: pageContent.html()
+		})
+	);
+}
+
+async function askGemini(
+	question: string,
+	isBacktracking: boolean = false
+): Promise<string> {
+	const dataSourceHashMap = await createDataSourceJSON();
+	const prompt = giveGeminiContext(question, dataSourceHashMap);
+	const result = await model.generateContent(prompt);
+	const response = await result.response;
+	const text = response.text().split(",");
+
+	for (const link of text) {
+		if (!(await redis.hGet("dataSource", link))) {
+			await getPageContent(link);
+		} else {
+			// get from Redis, break into chunks and vectors 
+			const raw = await redis.hGet("dataSource", link);
+			const data = JSON.parse(raw!);
+			await chunkText(data.content, link);
+		}
+	}
+
+	return "";
+}
+
+app.post("/ask-question", async (req: Request, res: Response) => {
+	const { question } = req.body;
+	const answer: string = await askGemini(question, false);
+});
+
 app.get("/", async (req: Request, res: Response) => {
+	await askGemini("Tell me about all the grad programs");
 	res.json(Object.fromEntries(await createDataSourceJSON()));
 });
 
@@ -135,10 +241,10 @@ app.listen(PORT, () => {
 // 	question?: string
 // ): Promise<GenerateContentStreamResult | string> {
 // 	if (question) {
-// 		const prompt = getPrompt1(question, gradCISCatalogLinks);
-// 		const result = await model.generateContent(prompt);
-// 		const response = await result.response;
-// 		const text = response.text();
+// const prompt = getPrompt1(question, gradCISCatalogLinks);
+// const result = await model.generateContent(prompt);
+// const response = await result.response;
+// const text = response.text();
 
 // 		if (text !== "N/A") {
 // 			const hrefList = text.split(",");
