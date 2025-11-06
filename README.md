@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project experimented with extending [a previous UD CIS chatbot system project]([https://www.google.com](https://github.com/Hairum-Qureshi/gradcatalog-ai)) by implementing a **Semantic Retrieval-Augmented Generation (RAG)** pipeline using **Google Gemini**, **Redis**, and **local transformer-based embeddings**. The goal was to move beyond simple keyword retrieval toward a pipeline capable of **semantic chunking**, **vector search**, and **cosine-similarity-driven context selection** for UD CIS graduate catalog content.
+This project experimented with extending [a previous UD CIS chatbot system project]([https://www.google.com](https://github.com/Hairum-Qureshi/gradcatalog-ai) by implementing a **Semantic Retrieval-Augmented Generation (RAG)** pipeline using **Google Gemini**, **Redis**, and **local transformer-based embeddings**. The goal was to move beyond simple keyword retrieval toward a pipeline capable of **semantic chunking**, **vector search**, and **cosine-similarity-driven context selection** for UD CIS graduate catalog content.
 
 Unlike the earlier chatbot, this approach attempted to build a **fully custom retriever**, using MiniLM for embeddings and Redis as a pseudo-vector store. Although the pipeline executes end-to-end — scraping pages, embedding text, storing vectors, and ranking chunks — the retrieval quality proved too unreliable for practical use.
 
@@ -101,6 +101,7 @@ REDIS_URL=redis://localhost:6379
 * ⚠️ Retrieval inconsistent; semantic precision insufficient
 * ❌ Not suitable for production context retrieval
 * 🚫 Development intentionally discontinued
+
 
 
 
