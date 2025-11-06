@@ -9,8 +9,9 @@ import { giveGeminiContext, giveGeminiAnswerInstructions } from "./prompts";
 import dotenv from "dotenv";
 import chalk from "chalk";
 import { startRedis, redis } from "./redis-init";
-import { Langbase } from "langbase";
 import { DataArray, pipeline } from "@xenova/transformers";
+import { NLPChunker } from "@orama/chunker";
+import similarity from "compute-cosine-similarity";
 
 dotenv.config();
 
@@ -22,12 +23,6 @@ const PORT = process.env.PORT! || 8000;
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-// Initialize the Langbase client
-// Head to: https://langbase.com/docs/api-reference/api-keys#get-your-langbase-api-key to learn how to get your API key
-const langbase = new Langbase({
-	apiKey: process.env.LANGBASE_API_KEY!
-});
-
 export interface CatalogLinkData {
 	text: string;
 	href: string;
@@ -36,6 +31,40 @@ export interface CatalogLinkData {
 export interface PageData {
 	linkRef: string;
 	content: string;
+}
+
+interface ChunkData {
+	chunkIndex: number;
+	text: string;
+	embedding: DataArray;
+}
+
+interface ChunkEmbedData {
+	chunkIndex: number;
+	text: string;
+	embedding: DataArray;
+}
+
+function useCosineSimilarity(
+	userQuestionVector: DataArray,
+	vectorEmbedsHashMap: Map<number, ChunkEmbedData>
+): { text: string; index: number } {
+	let text = "";
+	let index = -1;
+	let highestScore = -1;
+	for (const [key] of vectorEmbedsHashMap) {
+		const vecA = Array.from(userQuestionVector as Iterable<number>);
+		const embeddingObj = vectorEmbedsHashMap.get(key)!.embedding;
+		const vecB = Object.values(embeddingObj);
+		const s: number = similarity(vecA, vecB) as number;
+		if (s > highestScore) {
+			highestScore = s;
+			index = key;
+			text = vectorEmbedsHashMap.get(key)!.text;
+		}
+	}
+
+	return { text, index };
 }
 
 async function getVectorEmbedding(chunk: string): Promise<DataArray> {
@@ -52,19 +81,60 @@ async function getVectorEmbedding(chunk: string): Promise<DataArray> {
 	return response.data;
 }
 
+async function useChunks(
+	chunks: Record<string, string>,
+	link: string,
+	userQuestionVector: DataArray
+): Promise<string> {
+	// for each link, find the highest rated chunk from cosine similarity and for each highest rated chunk, get the previous and next chunk too for added context
+
+	const chosenChunkData: string[] = [];
+	const vectorEmbedsHashMap: Map<number, ChunkEmbedData> = new Map();
+	let chunkData: ChunkData;
+
+	for (let i = 0; i < Object.keys(chunks).length; i++) {
+		chunkData = JSON.parse(
+			(await redis.hGet(`${link}-chunk-embeds`, `chunk-${i}`)) as string
+		);
+
+		vectorEmbedsHashMap.set(chunkData.chunkIndex, {
+			embedding: chunkData.embedding,
+			text: chunkData.text,
+			chunkIndex: chunkData.chunkIndex
+		});
+	}
+
+	// once the vectorEmbeds array is populated, pass it to the computeCosineSimilarity function and then retrieve the previous and next chunk text too and push it to chosenChunkData array
+	const { text, index } = useCosineSimilarity(
+		userQuestionVector,
+		vectorEmbedsHashMap
+	);
+
+	chosenChunkData.push(text);
+
+	// get previous and next chunk text too for more context
+	if (index - 1 >= 0) {
+		chosenChunkData.push(vectorEmbedsHashMap.get(index - 1)!.text as string);
+	}
+
+	if (index + 1 < vectorEmbedsHashMap.size) {
+		chosenChunkData.push(vectorEmbedsHashMap.get(index + 1)!.text as string);
+	}
+
+	return chosenChunkData.join("\n\n");
+}
+
 async function chunkText(content: string, link: string) {
 	try {
-		const chunks = await langbase.chunker({
-			content,
-			chunkMaxLength: 1024,
-			chunkOverlap: 256
-		});
+		const maxTokens = 512;
+		const chunker = new NLPChunker();
+		const chunks = await chunker.chunk(content, maxTokens);
 
-		if (!(await redis.hetGet(`${link}-chunk-embeds`))) {
-			for (let i = 0; i < chunks.length; i++) {
+		for (let i = 0; i < chunks.length; i++) {
+			if (!(await redis.hGet(`${link}-chunk-embeds`, `chunk-${i}`))) {
 				await redis.hSet(
 					`${link}-chunk-embeds`,
-					i,
+					`chunk-${i}`,
 					JSON.stringify({
 						chunkIndex: i,
 						text: chunks[i],
@@ -142,11 +212,11 @@ async function getPageContent(href: string) {
 	const pageContent = $(".block_content");
 
 	await redis.hSet(
-		"dataSource",
+		"dataSourcePageContent",
 		href,
 		JSON.stringify({
 			linkRef: href,
-			content: pageContent.html()
+			content: pageContent.text()
 		})
 	);
 }
@@ -158,20 +228,23 @@ async function askGemini(
 	const dataSourceHashMap = await createDataSourceJSON();
 	const prompt = giveGeminiContext(question, dataSourceHashMap);
 	const result = await model.generateContent(prompt);
-	const response = await result.response;
+	const response = await result.response; // get the links that Gemini chose to user to answer the user query
 	const text = response.text().split(",");
+	const userQuestionVector: DataArray = await getVectorEmbedding(question);
+	let contextReference = "";
 
 	for (const link of text) {
-		if (!(await redis.hGet("dataSource", link))) {
+		if (!(await redis.hGet("dataSourcePageContent", link))) {
 			await getPageContent(link);
-		} else {
-			// get from Redis, break into chunks and vectors 
-			const raw = await redis.hGet("dataSource", link);
-			const data = JSON.parse(raw!);
-			await chunkText(data.content, link);
 		}
-	}
+		// get from Redis, break into chunks and vectors
+		const raw = await redis.hGet("dataSourcePageContent", link);
+		const data = JSON.parse(raw!);
+		await chunkText(data.content, link);
 
+		const chunks = await redis.hGetAll(`${link}-chunk-embeds`);
+		contextReference = await useChunks(chunks, link, userQuestionVector);
+	}
 	return "";
 }
 
@@ -191,38 +264,6 @@ app.listen(PORT, () => {
 	);
 	startRedis;
 });
-
-// import express, { Request, Response } from "express";
-// import axios from "axios";
-// import { load } from "cheerio";
-// import {
-// 	GenerateContentStreamResult,
-// 	GoogleGenerativeAI
-// } from "@google/generative-ai";
-// import { getPrompt1, getPrompt2 } from "./prompts";
-// import dotenv from "dotenv";
-// import chalk from "chalk";
-// import { startRedis, redis } from "./redis-init";
-
-// dotenv.config();
-
-// const app = express();
-// app.use(express.text());
-
-// const PORT = process.env.PORT! || 8000;
-
-// const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-// const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
-// export interface CatalogLinkData {
-// 	text: string;
-// 	href: string;
-// }
-
-// export interface PageData {
-// 	linkRef: string;
-// 	content: string;
-// }
 
 // async function getPageContent(href: string): Promise<PageData> {
 // 	const page = await axios.get(href);
