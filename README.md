@@ -103,7 +103,8 @@ REDIS_URL=redis://localhost:6379
 * 🚫 Development intentionally discontinued
 
 ## Note
-Unlike the previous version, this version does not have a frontend, nor does it take user input through the terminal. There is a hard-coded question already set inside of the GET '/' route. In order to properly run the program, visit `http://localhost:9000/`, and any time you visit/refresh the page, it'll run the program. This route also displays the JSON containing all the link data the AI will utilize in answering the user's queries. I'm aware there are plenty of better ways of doing this; however, I never ended up making the change.
+Unlike the previous version, this version does not have a frontend, nor does it take user input through the terminal. There is a hard-coded question already set inside of the GET '/' route. In order to properly run the program, visit `http://localhost:9000/`, and any time you visit/refresh the page, it'll run the program. This route also displays the JSON containing all the link data the AI will utilize in answering the user's queries. I'm aware that there are plenty of better ways I could've implemented to run the program than what I settled with for this; however, I never ended up making the change.
+
 
 
 
