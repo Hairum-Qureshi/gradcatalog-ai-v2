@@ -17,7 +17,7 @@ After implementing a more traditional RAG pipeline, this project served as a san
 * Test cosine similarity as a ranking strategy for academic-catalog text
 * Evaluate whether Redis could function as a lightweight vector store
 
-While the mechanics worked, the experiment highlighted a mismatched assumption: **vector similarity alone does not ensure useful semantic retrieval**, especially without proper chunking strategies or re-ranking methods. Instead of escalating complexity (vector DB, re-ranks, hybrid search), the experiment was stopped deliberately.
+While the mechanics worked, the experiment highlighted a mismatched assumption: **vector similarity alone does not ensure useful semantic retrieval**, especially without proper chunking strategies or re-ranking methods. Instead of escalating complexity (vector DB, re-ranks, hybrid search), the project was stopped deliberately due to how complex things were getting. I refrained from utilizing an external vector database because I had the intention of improving my capstone course's current AI chatbot implementation, and implementing a database would've been too much for this small project at the moment had this project was successful and approved.
 
 ---
 
@@ -104,6 +104,7 @@ REDIS_URL=redis://localhost:6379
 
 ## Note
 Unlike the previous version, this version does not have a frontend, nor does it take user input through the terminal. There is a hard-coded question already set inside of the GET '/' route. In order to properly run the program, visit `http://localhost:9000/`, and any time you visit/refresh the page, it'll run the program. This route also displays the JSON containing all the link data the AI will utilize in answering the user's queries. I'm aware that there are plenty of better ways I could've implemented to run the program than what I settled with for this; however, I never ended up making the change.
+
 
 
 
