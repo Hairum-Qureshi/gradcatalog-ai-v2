@@ -102,24 +102,5 @@ REDIS_URL=redis://localhost:6379
 * ❌ Not suitable for production context retrieval
 * 🚫 Development intentionally discontinued
 
----
 
-## Future Directions
 
-If revisited, improvements would require:
-
-* Replacing Redis with a real **vector database** (Qdrant/Chroma/Weaviate)
-* **Semantic chunker** instead of token slicing
-* **Cross-encoder re-ranking** or Gemini-scored retrieval
-* Hybrid lexical + vector search
-* Possibly offloading retrieval to Gemini’s future native APIs
-
-These steps move the system from “toy semantic search” to something robust — but they also introduce significantly more engineering complexity.
-
----
-
-## Lessons Learned
-
-This experiment surfaced a practical reality: **semantic retrieval is not trivial**, even with good embeddings. Cosine similarity offers a useful baseline for vector math, but treating it as a retrieval strategy — without chunk discipline, index structures, or re-ranking — produces brittle results.
-
-The pipeline validates the mechanics of manual RAG, but also demonstrates why production-grade systems rely on **vector stores + hybrid search + re-rankers**, not just raw cosine matching.
