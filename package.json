@@ -13,12 +13,16 @@
 	"type": "commonjs",
 	"dependencies": {
 		"@google/generative-ai": "^0.24.1",
+		"@orama/chunker": "^0.0.3",
+		"@xenova/transformers": "^2.17.2",
 		"axios": "^1.12.2",
 		"chalk": "^5.6.2",
 		"cheerio": "^1.1.2",
+		"compute-cosine-similarity": "^1.1.0",
 		"dotenv": "^17.2.3",
 		"express": "^5.1.0",
-		"nodemon": "^3.1.10"
+		"nodemon": "^3.1.10",
+		"redis": "^5.9.0"
 	},
 	"devDependencies": {
 		"@types/dotenv": "^6.1.1",
